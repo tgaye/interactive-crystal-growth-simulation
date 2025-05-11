@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Crystal Growth Simulation</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            max-width: 300px;
+            transition: all 0.3s ease;
+        }
+        #controls.hidden {
+            transform: translateX(-320px);
+        }
+        #toggle-controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 100;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="range"], select, button {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #randomize {
+            background: #2196F3;
+        }
+        #randomize:hover {
+            background: #0b7dda;
+        }
+        #reset {
+            background: #f44336;
+        }
+        #reset:hover {
+            background: #da190b;
+        }
+    </style>
+
+<base target="_self">
+
+
+    <button id="toggle-controls">☰ Controls</button>
+    <div id="controls">
+        <div class="control-group">
+            <label for="branching">Branching Complexity</label>
+            <input type="range" id="branching" min="1" max="10" value="3" step="1">
+        </div>
+        <div class="control-group">
+            <label for="growthSpeed">Growth Speed</label>
+            <input type="range" id="growthSpeed" min="0.1" max="2" value="0.5" step="0.1">
+        </div>
+        <div class="control-group">
+            <label for="crystalSize">Crystal Size</label>
+            <input type="range" id="crystalSize" min="0.1" max="2" value="1" step="0.1">
+        </div>
+        <div class="control-group">
+            <label for="colorTheme">Color Theme</label>
+            <select id="colorTheme">
+                <option value="ice">Ice Blue</option>
+                <option value="amethyst">Amethyst</option>
+                <option value="emerald">Emerald</option>
+                <option value="ruby">Ruby</option>
+                <option value="random">Random</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <button id="randomize">Randomize</button>
+            <button id="reset">Reset</button>
+        </div>
+    </div>
+
+    <script>
+        // Main variables
+        let scene, camera, renderer;
+        let crystals = [];
+        let mouseX = 0, mouseY = 0;
+        let branchingFactor = 3;
+        let growthSpeed = 0.5;
+        let crystalSize = 1;
+        let colorTheme = 'ice';
+        let seedPoints = [];
+        let animationId = null;
+        let clock = new THREE.Clock();
+
+        // Initialize the scene
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000022);
+
+            // Set up camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 30;
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Add lights
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Create initial seed points
+            createSeedPoints(5);
+
+            // Event listeners
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('mousemove', onMouseMove);
+            document.getElementById('toggle-controls').addEventListener('click', toggleControls);
+            document.getElementById('branching').addEventListener('input', updateParameters);
+            document.getElementById('growthSpeed').addEventListener('input', updateParameters);
+            document.getElementById('crystalSize').addEventListener('input', updateParameters);
+            document.getElementById('colorTheme').addEventListener('change', updateParameters);
+            document.getElementById('randomize').addEventListener('click', randomizeParameters);
+            document.getElementById('reset').addEventListener('click', resetParameters);
+
+            // Start animation
+            animate();
+        }
+
+        function createSeedPoints(count) {
+            // Clear existing seed points
+            seedPoints = [];
+            
+            // Create new seed points in a circle
+            for (let i = 0; i < count; i++) {
+                const angle = (i / count) * Math.PI * 2;
+                const radius = 5;
+                const x = Math.cos(angle) * radius;
+                const y = Math.sin(angle) * radius;
+                
+                seedPoints.push(new THREE.Vector3(x, y, 0));
+            }
+            
+            // Create initial crystals from seed points
+            createCrystals();
+        }
+
+        function createCrystals() {
+            // Clear existing crystals
+            crystals.forEach(crystal => {
+                scene.remove(crystal.mesh);
+            });
+            crystals = [];
+            
+            // Create new crystals from seed points
+            seedPoints.forEach(seed => {
+                const crystal = {
+                    position: seed.clone(),
+                    direction: new THREE.Vector3(
+                        (Math.random() - 0.5) * 0.2,
+                        (Math.random() - 0.5) * 0.2,
+                        (Math.random() - 0.5) * 0.2
+                    ).normalize(),
+                    branches: [],
+                    generation: 0,
+                    maxGenerations: Math.floor(branchingFactor),
+                    mesh: null
+                };
+                
+                createCrystalMesh(crystal);
+                crystals.push(crystal);
+            });
+        }
+
+        function createCrystalMesh(crystal) {
+            const geometry = new THREE.IcosahedronGeometry(0.5 * crystalSize, 0);
+            let material;
+            
+            switch(colorTheme) {
+                case 'ice':
+                    material = new THREE.MeshPhongMaterial({ 
+                        color: 0x88ccff,
+                        emissive: 0x002244,
+                        specular: 0xffffff,
+                        shininess: 30,
+                        transparent: true,
+                        opacity: 0.9
+                    });
+                    break;
+                case 'amethyst':
+                    material = new THREE.MeshPhongMaterial({ 
+                        color: 0x9966cc,
+                        emissive: 0x330066,
+                        specular: 0xddbbff,
+                        shininess: 50,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    break;
+                case 'emerald':
+                    material = new THREE.MeshPhongMaterial({ 
+                        color: 0x50c878,
+                        emissive: 0x004d00,
+                        specular: 0x88ff88,
+                        shininess: 60,
+                        transparent: true,
+                        opacity: 0.85
+                    });
+                    break;
+                case 'ruby':
+                    material = new THREE.MeshPhongMaterial({ 
+                        color: 0xe0115f,
+                        emissive: 0x500000,
+                        specular: 0xffaaaa,
+                        shininess: 40,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    break;
+                case 'random':
+                    material = new THREE.MeshPhongMaterial({ 
+                        color: Math.random() * 0xffffff,
+                        emissive: Math.random() * 0x333333,
+                        specular: 0xffffff,
+                        shininess: 10 + Math.random() * 50,
+                        transparent: true,
+                        opacity: 0.7 + Math.random() * 0.3
+                    });
+                    break;
+            }
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.copy(crystal.position);
+            scene.add(mesh);
+            crystal.mesh = mesh;
+        }
+
+        function growCrystals(delta) {
+            crystals.forEach(crystal => {
+                if (crystal.generation < crystal.maxGenerations) {
+                    // Move crystal in its direction
+                    crystal.position.add(crystal.direction.clone().multiplyScalar(growthSpeed * delta * 5));
+                    crystal.mesh.position.copy(crystal.position);
+                    
+                    // Random chance to branch
+                    if (Math.random() < 0.02 * branchingFactor && crystal.branches.length < branchingFactor) {
+                        const branchDirection = crystal.direction.clone()
+                            .add(new THREE.Vector3(
+                                (Math.random() - 0.5) * 0.5,
+                                (Math.random() - 0.5) * 0.5,
+                                (Math.random() - 0.5) * 0.5
+                            ))
+                            .normalize();
+                        
+                        const branch = {
+                            position: crystal.position.clone(),
+                            direction: branchDirection,
+                            branches: [],
+                            generation: crystal.generation + 1,
+                            maxGenerations: crystal.maxGenerations,
+                            mesh: null
+                        };
+                        
+                        createCrystalMesh(branch);
+                        crystal.branches.push(branch);
+                        crystals.push(branch);
+                    }
+                    
+                    // React to mouse position
+                    const mouseVec = new THREE.Vector3(
+                        (mouseX / window.innerWidth) * 2 - 1,
+                        -(mouseY / window.innerHeight) * 2 + 1,
+                        0
+                    ).multiplyScalar(20);
+                    
+                    const toMouse = mouseVec.clone().sub(crystal.position);
+                    const distance = toMouse.length();
+                    
+                    if (distance < 10) {
+                        // Repel from mouse
+                        crystal.direction.add(toMouse.normalize().multiplyScalar(-0.1 * delta * 50)).normalize();
+                    }
+                }
+            });
+        }
+
+        function animate() {
+            animationId = requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            
+            growCrystals(delta);
+            
+            // Rotate camera slightly for better viewing
+            camera.position.x = Math.sin(Date.now() * 0.0005) * 30;
+            camera.position.z = Math.cos(Date.now() * 0.0005) * 30;
+            camera.lookAt(0, 0, 0);
+            
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onMouseMove(event) {
+            mouseX = event.clientX;
+            mouseY = event.clientY;
+        }
+
+        function toggleControls() {
+            const controls = document.getElementById('controls');
+            controls.classList.toggle('hidden');
+        }
+
+        function updateParameters() {
+            branchingFactor = parseInt(document.getElementById('branching').value);
+            growthSpeed = parseFloat(document.getElementById('growthSpeed').value);
+            crystalSize = parseFloat(document.getElementById('crystalSize').value);
+            colorTheme = document.getElementById('colorTheme').value;
+            
+            // Update existing crystals
+            crystals.forEach(crystal => {
+                if (crystal.mesh) {
+                    scene.remove(crystal.mesh);
+                    createCrystalMesh(crystal);
+                }
+            });
+        }
+
+        function randomizeParameters() {
+            document.getElementById('branching').value = Math.floor(Math.random() * 10) + 1;
+            document.getElementById('growthSpeed').value = (Math.random() * 1.9 + 0.1).toFixed(1);
+            document.getElementById('crystalSize').value = (Math.random() * 1.9 + 0.1).toFixed(1);
+            document.getElementById('colorTheme').value = ['ice', 'amethyst', 'emerald', 'ruby', 'random'][Math.floor(Math.random() * 5)];
+            
+            updateParameters();
+            createSeedPoints(Math.floor(Math.random() * 5) + 3);
+        }
+
+        function resetParameters() {
+            document.getElementById('branching').value = 3;
+            document.getElementById('growthSpeed').value = 0.5;
+            document.getElementById('crystalSize').value = 1;
+            document.getElementById('colorTheme').value = 'ice';
+            
+            updateParameters();
+            createSeedPoints(5);
+        }
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            
+            crystals.forEach(crystal => {
+                if (crystal.mesh) {
+                    crystal.mesh.geometry.dispose();
+                    crystal.mesh.material.dispose();
+                    scene.remove(crystal.mesh);
+                }
+            });
+        });
+
+        // Start the application
+        init();
+    </script>
+
+              
+          
+                
+          
+              
